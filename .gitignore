@@ -1,0 +1,55 @@
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+backend/.venv/
+
+# Virtualenvs and env files
+.env
+.env.local
+backend/.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+.pnpm-debug.log*
+
+# Next.js
+.next/
+out/
+
+# Frontend build / cache
+frontend/.next/
+frontend/.vercel/
+
+# Certificates and keys
+*.pem
+*.key
+*.crt
+*.p12
+
+# Logs
+logs/
+*.log
+
+# IDEs
+.vscode/
+.idea/
+
+# Docker
+docker-compose.override.yml
+
+# Misc
+*.sqlite3
+*.db
+__MACOSX/
