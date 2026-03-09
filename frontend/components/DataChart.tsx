@@ -61,9 +61,11 @@ export default function DataChart({ chartData, externalAxes, onAxesChange }: Pro
     const [chartType, setChartType] = useState<ChartType>(
         chartData.suggestedType as ChartType
     );
-    const [selectedLabelKey, setSelectedLabelKey] = useState<string | null>(null);
-    // 기본값: 선택 해제 상태
-    const [selectedYKeys, setSelectedYKeys] = useState<string[]>([]);
+    const [selectedLabelKey, setSelectedLabelKey] = useState<string | null>(initialLabelKey ?? null);
+    // 기본값: 첫 번째 numeric key를 Y축으로 선택
+    const [selectedYKeys, setSelectedYKeys] = useState<string[]>(
+        initialNumericKeys && initialNumericKeys.length > 0 ? [initialNumericKeys[0]] : []
+    );
     const [showSeriesList, setShowSeriesList] = useState(false);
     const [ySearch, setYSearch] = useState("");
     
@@ -274,6 +276,36 @@ export default function DataChart({ chartData, externalAxes, onAxesChange }: Pro
     const resetChartZoom = () => {
         setChartDataSlice([0, paginatedData.length - 1]);
         setChartDragRange(null);
+    };
+
+    // Y-axis zoom via mouse wheel: zoom in/out around center of currently displayed Y range
+    const handleChartWheel = (e: React.WheelEvent) => {
+        if (chartType === "pie" || selectedYKeys.length === 0) return;
+        e.preventDefault();
+
+        // Collect current values from displayed data for selected series
+        const vals: number[] = [];
+        for (const row of displayData) {
+            for (const k of selectedYKeys) {
+                const v = Number(row[k]);
+                if (!isNaN(v)) vals.push(v);
+            }
+        }
+        if (vals.length === 0) return;
+
+        const curMin = typeof yAxisMin === 'number' ? yAxisMin : Math.min(...vals);
+        const curMax = typeof yAxisMax === 'number' ? yAxisMax : Math.max(...vals);
+        const center = (curMin + curMax) / 2;
+        const range = Math.max(1e-6, curMax - curMin);
+
+        // wheel delta: positive => zoom out, negative => zoom in
+        const scale = e.deltaY > 0 ? 1.12 : 0.88;
+        const newRange = range * scale;
+        const newMin = center - newRange / 2;
+        const newMax = center + newRange / 2;
+
+        setYAxisMin(newMin);
+        setYAxisMax(newMax);
     };
 
     const selectAll = () => setSelectedYKeys([...yAxisOptions]);
@@ -505,7 +537,15 @@ export default function DataChart({ chartData, externalAxes, onAxesChange }: Pro
                             className="flex items-center gap-1.5 px-3 py-1 text-xs text-amber-400 hover:text-amber-300 transition-colors"
                         >
                             <ZoomIn className="w-3.5 h-3.5" />
-                            Reset zoom
+                            Reset X zoom
+                        </button>
+                    )}
+                    {(yAxisMin !== null || yAxisMax !== null) && (
+                        <button
+                            onClick={() => { setYAxisMin(null); setYAxisMax(null); }}
+                            className="flex items-center gap-1.5 px-3 py-1 text-xs text-amber-400 hover:text-amber-300 transition-colors"
+                        >
+                            Reset Y
                         </button>
                     )}
                     {chartType !== "pie" && (
@@ -522,6 +562,7 @@ export default function DataChart({ chartData, externalAxes, onAxesChange }: Pro
                     onMouseMove={handleChartMouseMove}
                     onMouseUp={handleChartMouseUp}
                     onMouseLeave={handleChartMouseUp}
+                    onWheel={handleChartWheel}
                 >
                     {selectedYKeys.length === 0 ? (
                         <div className="flex items-center justify-center h-full text-slate-500">
@@ -637,8 +678,7 @@ export default function DataChart({ chartData, externalAxes, onAxesChange }: Pro
             </div>
 
             {/* Pagination — 전체 보기 + 페이지 버튼 항상 한 줄 */}
-            {totalPages > 1 && (
-                <div className="flex items-center justify-center gap-2 flex-wrap">
+            <div className="flex items-center justify-center gap-2 flex-wrap">
                     {/* 전체 보기 토글 */}
                     <button
                         onClick={() => { setShowAllData(p => !p); setCurrentPage(1); }}
@@ -705,8 +745,7 @@ export default function DataChart({ chartData, externalAxes, onAxesChange }: Pro
                             : `Page ${currentPage} / ${totalPages} (${data.length} rows)`
                         }
                     </span>
-                </div>
-            )}
+            </div>
         </div>
     );
 }
