@@ -182,7 +182,10 @@ export function useAiChat({
             return result;
         };
 
-        const inject_data = classifyNeedsData(question);
+        // If an AI-generated HTML chart already exists, always send the full data
+        // context so the LLM can see (and preserve) any row-range filtering logic
+        // (e.g. rows.slice(500, 600)) embedded in the current HTML.
+        const inject_data = htmlChart ? true : classifyNeedsData(question);
 
         abortRef.current = streamReport(
             {

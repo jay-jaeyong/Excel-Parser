@@ -6,7 +6,7 @@ Endpoints:
   POST /api/chart-data    — Send (possibly edited) table, get chart payload
 """
 import io
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -42,7 +42,7 @@ class UploadResponse(BaseModel):
 
 
 class ChartResponse(BaseModel):
-    labelKey: str | None
+    labelKey: Optional[str]
     data: list[dict[str, Any]]
     numericKeys: list[str]
     suggestedType: str
@@ -64,7 +64,7 @@ def _validate_extension(filename: str) -> None:
 @router.post("/upload", response_model=UploadResponse)
 async def upload_excel(
     file: UploadFile = File(...),
-    sheet: str | None = Form(None),
+    sheet: Optional[str] = Form(None),
     settings: Settings = Depends(get_settings),
 ):
     """

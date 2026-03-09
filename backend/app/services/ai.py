@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Optional
 
 from openai import AsyncOpenAI
 
@@ -296,6 +296,20 @@ visualization, table, dashboard, or data-driven UI:
 ...complete modified html...
 </CHART_HTML>
 
+## ★ CRITICAL: 기존 HTML 수정 시 데이터 코드 완전 보존 규칙 ★
+When modifying an existing HTML chart, you MUST preserve the data loading and
+filtering code EXACTLY as it appears in the current HTML. This includes:
+- `const headers = window.__HEADERS__ || [];`
+- `const rows = window.__ROWS__ || [];`
+- ANY `.slice(N, M)`, `.filter(...)`, `.indexOf(...)`, or other row selection logic
+- ANY derived variables computed from headers/rows
+
+Do NOT simplify, rewrite, or replace the data section.
+Do NOT change rows.slice(N, M) to rows — the user explicitly chose that range.
+Do NOT change the data range unless the user EXPLICITLY asks to show different rows.
+
+Only the following may change: chart type config, colors, CSS, title, legend, axis labels.
+
 ## 핵심 규칙 — 데이터는 반드시 window globals에서 읽기
 The host page ALWAYS injects the FULL Excel dataset before the HTML runs:
   window.__HEADERS__  — string[]          (column names)
@@ -326,7 +340,7 @@ Other rules:
 def _build_report_context(
     headers: list[str],
     rows: list[list[Any]],
-    x_key: str | None,
+    x_key: Optional[str],
     y_keys: list[str],
     chart_type: str,
     settings: Settings,
@@ -419,10 +433,10 @@ _PALETTE = [
 def generate_chart_html(
     headers: list[str],
     rows: list[list[Any]],
-    x_key: str | None,
+    x_key: Optional[str],
     y_keys: list[str],
     chart_type: str,
-    custom_options: dict | None = None,
+    custom_options: Optional[dict] = None,
     max_points: int = 500,
 ) -> str:
     """Generate a self-contained Chart.js HTML page for the given data.
@@ -595,13 +609,13 @@ def generate_chart_html(
 async def stream_report(
     headers: list[str],
     rows: list[list[Any]],
-    x_key: str | None,
+    x_key: Optional[str],
     y_keys: list[str],
     chart_type: str,
     question: str,
     history: list[dict],  # [{"role": "user"|"assistant", "content": str}]
     settings: Settings,
-    current_html: str | None = None,  # Current Chart.js HTML for AI to modify directly
+    current_html: Optional[str] = None,  # Current Chart.js HTML for AI to modify directly
     inject_data: bool = True,  # False → skip table context (style-only requests)
 ) -> AsyncGenerator[str, None]:
     """
@@ -622,12 +636,13 @@ async def stream_report(
         )
 
     # Append current HTML chart code so AI can modify it directly
+    # Use a generous limit so the full data-processing JS section is visible.
     if current_html:
-        max_html = 6000
+        max_html = 16000
         html_snippet = (
             current_html[:max_html] + "\n...(HTML truncated for context limit)"
         ) if len(current_html) > max_html else current_html
-        data_ctx += f"\n\n## 현재 HTML 차트 코드\n```html\n{html_snippet}\n```"
+        data_ctx += f"\n\n## 현재 HTML 차트 코드 (이 코드를 기반으로 수정하세요)\n```html\n{html_snippet}\n```"
 
     # Build message history
     messages: list[dict] = [

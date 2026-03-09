@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -33,7 +33,7 @@ class AnalyzeRequest(BaseModel):
 class AnalyzeResponse(BaseModel):
     can_graph: bool
     reason: str
-    x_key: str | None
+    x_key: Optional[str]
     y_keys: list[str]
     chart_type: str
 
@@ -46,21 +46,21 @@ class ChatMessage(BaseModel):
 class ChartHtmlRequest(BaseModel):
     headers: list[str]
     rows: list[list[Any]]
-    x_key: str | None = None
+    x_key: Optional[str] = None
     y_keys: list[str] = []
     chart_type: str = "bar"
-    custom_options: dict | None = None
+    custom_options: Optional[dict] = None
 
 
 class ReportRequest(BaseModel):
     headers: list[str]
     rows: list[list[Any]]
-    x_key: str | None = None
+    x_key: Optional[str] = None
     y_keys: list[str] = []
     chart_type: str = "bar"
     question: str
     history: list[ChatMessage] = []
-    current_html: str | None = None  # Current chart HTML for AI to modify directly
+    current_html: Optional[str] = None  # Current chart HTML for AI to modify directly
     inject_data: bool = True  # False → skip table context (style-only requests)
 
 
