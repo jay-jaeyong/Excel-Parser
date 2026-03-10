@@ -1,106 +1,119 @@
 # Excel AI Analyzer
 
-Excel 파일을 업로드하면 자동 파싱, 인터랙티브 차트, AI 분석·채팅까지 제공하는 풀스택 웹 앱.  
-**핵심 설계 원칙**: 로컬 LLM(LM Studio)을 파서 보완 + AI 분석 + 코드 생성에 단계적으로 활용하고, 비용·속도·개인정보 보호를 모두 충족합니다.
+Excel 파일을 업로드하면 **로컬 LLM이 데이터를 분석하고, 자체완결 HTML 차트 코드를 생성**합니다.  
+사용자는 **채팅으로 HTML을 실시간 수정**하고, **Excel 원본 데이터가 HTML에 런타임 주입**되어 최종 차트가 렌더링됩니다.
+
+> **핵심 아이디어**  
+> AI는 **데이터가 아닌 "코드"를 생성**합니다.  
+> HTML 차트 템플릿에는 데이터가 하드코딩되지 않고, `window.__HEADERS__` / `window.__ROWS__` 전역 변수만 참조합니다.  
+> 프론트엔드가 Excel 원본 데이터를 이 변수에 주입하면 → 차트가 완성됩니다.  
+> 채팅으로 "라인 차트로 바꿔줘", "배경 검정으로" 같은 요청을 보내면 AI가 HTML 코드 자체를 수정해서 돌려줍니다.
 
 ---
 
 ## 목차
 
-1. [플로우차트](#플로우차트)
+1. [핵심 플로우](#핵심-플로우)
 2. [Tech Stack](#tech-stack)
 3. [전체 아키텍처](#전체-아키텍처)
-3. [데이터 흐름](#데이터-흐름)
-4. [AI 작동 방식 — 4가지 모듈](#ai-작동-방식--4가지-모듈)
-5. [프롬프트 엔지니어링 전략](#프롬프트-엔지니어링-전략)
-6. [HTML 차트 데이터 주입 패턴](#html-차트-데이터-주입-패턴)
-7. [2단계 파서](#2단계-파서-parserpy)
-8. [빠른 시작](#빠른-시작)
-9. [주요 설정값](#주요-설정값)
-10. [API Reference](#api-reference)
-11. [Troubleshooting](#troubleshooting)
+4. [데이터 흐름](#데이터-흐름)
+5. [AI 작동 방식 — 4가지 모듈](#ai-작동-방식--4가지-모듈)
+6. [프롬프트 엔지니어링 전략](#프롬프트-엔지니어링-전략)
+7. [HTML 차트 데이터 주입 패턴](#html-차트-데이터-주입-패턴)
+8. [2단계 파서](#2단계-파서-parserpy)
+9. [빠른 시작](#빠른-시작)
+10. [주요 설정값](#주요-설정값)
+11. [API Reference](#api-reference)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
-## 플로우차트
+## 핵심 플로우
+
+> 이 프로젝트의 핵심은 **3단계 파이프라인**입니다:  
+> **① AI가 Excel을 분석해서 HTML 차트 코드를 생성** → **② 채팅으로 HTML 코드를 실시간 수정** → **③ Excel 원본 데이터를 HTML에 주입해서 차트 렌더링**
 
 ### 전체 플로우
 
 ```mermaid
 flowchart TD
-    Start([📂 Excel 파일 업로드]) --> Parse[POST /api/upload<br/>openpyxl 구조 분석]
-    Parse --> Table[테이블 표시<br/>DataTable + Recharts 차트]
+    Start([📂 Excel 파일 업로드]) --> Parse[openpyxl 구조 분석<br/>headers + rows 추출]
+    Parse --> Table[테이블 표시]
 
-    Table --> AI["🤖 AI 자동 분석" 버튼]
+    Table --> AI["🤖 AI 자동 분석"]
 
-    AI --> Analyze[POST /api/ai/analyze<br/>로컬 LLM이 데이터 샘플 분석]
+    AI --> Analyze["로컬 LLM이 데이터 샘플 분석<br/>(최대 25행)"]
     Analyze --> Judge{차트화 가능?}
     Judge -->|No| Reason[사유 표시]
-    Judge -->|Yes| Axes[축 추천 결과<br/>x_key · y_keys · chart_type]
+    Judge -->|Yes| Axes["축 추천: x_key · y_keys · chart_type"]
 
-    Axes --> GenHTML[POST /api/ai/chart-html<br/>Chart.js HTML 템플릿 생성]
-    GenHTML --> Inject[프론트엔드가 데이터 주입<br/>window.__HEADERS__ / __ROWS__]
-    Inject --> Preview["📊 iframe Chart.js 차트 표시"]
+    Axes --> GenHTML["⭐ AI가 Chart.js HTML 코드 생성<br/>(데이터 없이 코드만 생성)"]
+    GenHTML --> Inject["⭐ Excel 원본 데이터를 HTML에 주입<br/>window.__HEADERS__ = headers<br/>window.__ROWS__ = rows"]
+    Inject --> Preview["📊 iframe으로 완성된 차트 렌더링"]
 
-    Preview --> Chat{💬 채팅으로 차트 수정 요청}
+    Preview --> Chat{"💬 채팅으로 차트 수정 요청<br/>'라인 차트로 바꿔줘'<br/>'배경색 검정으로'"}
 
-    Chat --> Classify[classifyNeedsData<br/>질문 유형 분류]
-    Classify -->|데이터 분석| DataOn["데이터 포함 전송<br/>(inject_data: true)"]
-    Classify -->|스타일 변경| DataOff["컬럼명 + HTML만 전송<br/>(inject_data: false)"]
+    Chat --> SSE["⭐ AI가 HTML 코드를 수정해서 반환<br/>SSE 스트리밍"]
 
-    DataOn --> SSE[POST /api/ai/report<br/>SSE 스트리밍 응답]
-    DataOff --> SSE
+    SSE --> Directive{응답 내 지시어}
 
-    SSE --> LLM[로컬 LLM 응답 스트리밍]
-    LLM --> Directive{응답 내 지시어 감지}
+    Directive -->|CHART_CONFIG| ReGen["축/타입 변경<br/>→ HTML 코드 재생성"]
+    Directive -->|CHART_HTML| Replace["AI가 직접 수정한<br/>HTML 코드로 교체"]
+    Directive -->|텍스트만| Markdown[Markdown 답변]
 
-    Directive -->|CHART_CONFIG| ReGen["축/타입 변경 → HTML 재생성<br/>→ iframe 업데이트"]
-    Directive -->|CHART_HTML| Replace["LLM이 수정한 HTML로<br/>iframe 직접 교체"]
-    Directive -->|텍스트만| Markdown[Markdown 답변 표시]
-
-    ReGen --> Preview
-    Replace --> Preview
+    ReGen --> Inject
+    Replace --> Inject
     Markdown --> Chat
 
     style Start fill:#3b82f6,stroke:#1d4ed8,color:#fff
-    style AI fill:#10b981,stroke:#059669,color:#fff
-    style Analyze fill:#10b981,stroke:#059669,color:#fff
-    style GenHTML fill:#06b6d4,stroke:#0891b2,color:#fff
+    style GenHTML fill:#f59e0b,stroke:#d97706,color:#fff,stroke-width:3px
+    style Inject fill:#f59e0b,stroke:#d97706,color:#fff,stroke-width:3px
+    style SSE fill:#f59e0b,stroke:#d97706,color:#fff,stroke-width:3px
+    style Chat fill:#ef4444,stroke:#dc2626,color:#fff,stroke-width:3px
     style Preview fill:#06b6d4,stroke:#0891b2,color:#fff
-    style SSE fill:#ef4444,stroke:#dc2626,color:#fff
-    style LLM fill:#f59e0b,stroke:#d97706,color:#fff
     style ReGen fill:#8b5cf6,stroke:#6d28d9,color:#fff
     style Replace fill:#8b5cf6,stroke:#6d28d9,color:#fff
+    style Analyze fill:#10b981,stroke:#059669,color:#fff
 ```
 
-### AI 차트 생성 · 수정 상세
+### 핵심 파이프라인 상세
 
 ```mermaid
 flowchart LR
-    subgraph Step1["1️⃣ AI 분석"]
-        Data[headers + 25행 샘플<br/>Markdown 테이블] --> LLM1["로컬 LLM<br/>(qwen3.5-9b)"]
-        LLM1 --> Result["JSON 응답<br/>{can_graph, x_key,<br/>y_keys, chart_type}"]
+    subgraph Step1["1️⃣ AI → HTML 코드 생성"]
+        direction TB
+        Data["Excel 데이터 샘플"] --> LLM1["로컬 LLM 분석"]
+        LLM1 --> Result["축 추천 JSON"]
+        Result --> Template["Chart.js HTML 템플릿 생성<br/>(데이터는 포함하지 않음)"]
+        Template --> Code["HTML 코드 출력<br/>window.__HEADERS__ 참조<br/>window.__ROWS__ 참조"]
     end
 
-    subgraph Step2["2️⃣ HTML 차트 생성"]
-        Result --> Template["서버사이드 템플릿<br/>(LLM 호출 없음)"]
-        Template --> HTML["자체완결 HTML<br/>Chart.js 4 CDN"]
-        HTML --> FE["프론트엔드<br/>데이터 주입 + iframe"]
+    subgraph Step2["2️⃣ 채팅 → HTML 코드 수정"]
+        direction TB
+        Q["사용자: '파이 차트로 바꿔줘'"] --> LLM2["LLM이 현재 HTML 코드를 받아서"]
+        LLM2 --> Mod["수정된 HTML 코드 반환"]
+        Mod --> Apply["CHART_HTML → iframe 교체<br/>CHART_CONFIG → 재생성"]
     end
 
-    subgraph Step3["3️⃣ 채팅으로 차트 수정"]
-        FE --> Q["사용자 질문<br/>'라인 차트로 바꿔줘'<br/>'배경 검정으로'"]
-        Q --> LLM2["로컬 LLM<br/>SSE 스트리밍"]
-        LLM2 --> D1["CHART_CONFIG<br/>축/타입 변경"]
-        LLM2 --> D2["CHART_HTML<br/>HTML 직접 수정"]
-        D1 --> FE
-        D2 --> FE
+    subgraph Step3["3️⃣ Excel 원본 → HTML 주입 → 차트"]
+        direction TB
+        Excel["Excel 원본 데이터<br/>headers + rows"] --> Inject["iframe 로드 전<br/>script 태그로 주입"]
+        Inject --> Globals["window.__HEADERS__ = [...]<br/>window.__ROWS__ = [...]"]
+        Globals --> Render["🎯 Chart.js가 전역 변수를 읽어<br/>최종 차트 렌더링"]
     end
+
+    Code --> Step2
+    Apply --> Step3
 
     style Step1 fill:#0f172a,stroke:#10b981,color:#e2e8f0
-    style Step2 fill:#0f172a,stroke:#06b6d4,color:#e2e8f0
-    style Step3 fill:#0f172a,stroke:#f59e0b,color:#e2e8f0
+    style Step2 fill:#0f172a,stroke:#f59e0b,color:#e2e8f0,stroke-width:3px
+    style Step3 fill:#0f172a,stroke:#ef4444,color:#e2e8f0,stroke-width:3px
 ```
+
+> **왜 이렇게 설계했나?**  
+> AI가 수천 행의 데이터를 HTML에 하드코딩하면 토큰 폭발 + HTML 비대화가 발생합니다.  
+> 대신 AI는 **"코드 구조만"** 생성하고, **실제 데이터는 프론트엔드가 런타임에 주입**합니다.  
+> 채팅으로 차트를 수정할 때도 AI는 코드만 수정하면 되므로 빠르고 토큰 효율적입니다.
 
 ---
 
