@@ -7,8 +7,9 @@ Excel 파일을 업로드하면 자동 파싱, 인터랙티브 차트, AI 분석
 
 ## 목차
 
-1. [Tech Stack](#tech-stack)
-2. [전체 아키텍처](#전체-아키텍처)
+1. [플로우차트](#플로우차트)
+2. [Tech Stack](#tech-stack)
+3. [전체 아키텍처](#전체-아키텍처)
 3. [데이터 흐름](#데이터-흐름)
 4. [AI 작동 방식 — 4가지 모듈](#ai-작동-방식--4가지-모듈)
 5. [프롬프트 엔지니어링 전략](#프롬프트-엔지니어링-전략)
@@ -18,6 +19,143 @@ Excel 파일을 업로드하면 자동 파싱, 인터랙티브 차트, AI 분석
 9. [주요 설정값](#주요-설정값)
 10. [API Reference](#api-reference)
 11. [Troubleshooting](#troubleshooting)
+
+---
+
+## 플로우차트
+
+### 시스템 아키텍처
+
+```mermaid
+graph TB
+    subgraph Browser["🌐 Browser (Next.js 15 + React 19)"]
+        FU[FileUpload<br/>드래그 앤 드롭]
+        DT[DataTable<br/>편집 가능 테이블]
+        DC[DataChart<br/>Recharts 인터랙티브 차트]
+        AP[AiAnalysisPanel]
+        HCP[HtmlChartPreview<br/>Chart.js iframe]
+        CP[ChatPanel<br/>SSE 스트리밍 채팅]
+    end
+
+    subgraph Hooks["🪝 React Hooks (상태 관리)"]
+        UED[useExcelData]
+        UAA[useAiAnalysis]
+        UAC[useAiChat]
+    end
+
+    subgraph Backend["⚙️ FastAPI Backend (port 8000)"]
+        R1[POST /api/upload]
+        R2[POST /api/chart-data]
+        R3[POST /api/ai/analyze]
+        R4[POST /api/ai/report]
+        R5[POST /api/ai/chart-html]
+        R6[GET /api/ai/status]
+    end
+
+    subgraph Services["🔧 Backend Services"]
+        PS[Parser Service<br/>2단계 파싱]
+        CS[Chart Service<br/>Recharts 데이터 변환]
+        AS[AI Service<br/>LLM 통신]
+        HS[HTML Chart<br/>Chart.js 템플릿]
+    end
+
+    subgraph LLM["🤖 LLM Layer"]
+        LS[LM Studio / Ollama<br/>localhost:1234]
+        OA[OpenAI API<br/>gpt-4o-mini]
+        GM[Gemini API<br/>gemini-1.5-flash]
+    end
+
+    FU --> UED
+    DT --> UED
+    DC --> UED
+    AP --> UAA
+    AP --> UAC
+    HCP --> UAA
+    CP --> UAC
+
+    UED --> R1
+    UED --> R2
+    UAA --> R3
+    UAA --> R5
+    UAC --> R4
+    UAA --> R6
+
+    R1 --> PS
+    R2 --> CS
+    R3 --> AS
+    R4 --> AS
+    R5 --> HS
+
+    PS -.->|Stage 2 폴백| OA
+    PS -.->|Stage 2 폴백| GM
+    AS --> LS
+
+    style Browser fill:#1e293b,stroke:#3b82f6,color:#e2e8f0
+    style Backend fill:#1e293b,stroke:#10b981,color:#e2e8f0
+    style LLM fill:#1e293b,stroke:#f59e0b,color:#e2e8f0
+    style Services fill:#1e293b,stroke:#8b5cf6,color:#e2e8f0
+    style Hooks fill:#1e293b,stroke:#06b6d4,color:#e2e8f0
+```
+
+### 사용자 플로우차트
+
+```mermaid
+flowchart TD
+    Start([사용자가 Excel 파일 선택]) --> Upload[POST /api/upload<br/>파일 업로드]
+    
+    Upload --> S1[Stage 1: 구조 분석<br/>openpyxl 휴리스틱]
+    S1 --> ConfCheck{신뢰도 >= 0.6?}
+    
+    ConfCheck -->|Yes| ParseDone[파싱 완료<br/>stage=1]
+    ConfCheck -->|No & LLM 활성화| S2[Stage 2: LLM 폴백<br/>OpenAI / Gemini]
+    ConfCheck -->|No & LLM 비활성화| ParseDone
+    S2 --> ParseDone2[파싱 완료<br/>stage=2]
+    
+    ParseDone --> Display
+    ParseDone2 --> Display
+    
+    Display[프론트엔드 표시<br/>DataTable + DataChart] --> ChartData[POST /api/chart-data<br/>Recharts 메타데이터 생성]
+    ChartData --> Render[Recharts 차트 렌더링<br/>Bar / Line / Pie]
+    
+    Display --> AIBtn{"AI 자동 분석" 버튼 클릭}
+    
+    AIBtn --> Analyze[POST /api/ai/analyze<br/>LLM 축 추천]
+    Analyze --> CanGraph{그래프화 가능?}
+    
+    CanGraph -->|Yes| GenHTML[POST /api/ai/chart-html<br/>Chart.js HTML 생성]
+    CanGraph -->|No| NoGraph[사유 표시]
+    
+    GenHTML --> Inject[프론트엔드 데이터 주입<br/>window.__HEADERS__<br/>window.__ROWS__]
+    Inject --> IFrame[iframe으로<br/>Chart.js 차트 렌더링]
+    
+    IFrame --> Chat{사용자가 채팅 질문 입력}
+    
+    Chat --> Classify[classifyNeedsData<br/>데이터 필요 여부 분류]
+    Classify -->|데이터 분석 질문| WithData[inject_data: true<br/>테이블 데이터 포함]
+    Classify -->|스타일 변경 요청| NoData[inject_data: false<br/>컬럼명 + HTML만]
+    
+    WithData --> SSE[POST /api/ai/report<br/>SSE 스트리밍]
+    NoData --> SSE
+    
+    SSE --> Stream[LLM 응답 스트리밍]
+    Stream --> Parse{응답 내 지시어 파싱}
+    
+    Parse -->|텍스트만| MD[Markdown 답변 표시]
+    Parse -->|CHART_CONFIG| UpdateAxes[Recharts 축/타입 변경<br/>+ HTML 차트 재생성]
+    Parse -->|CHART_HTML| ReplaceHTML[iframe HTML 전체 교체]
+    
+    UpdateAxes --> Chat
+    ReplaceHTML --> Chat
+    MD --> Chat
+
+    style Start fill:#3b82f6,stroke:#1d4ed8,color:#fff
+    style S1 fill:#8b5cf6,stroke:#6d28d9,color:#fff
+    style S2 fill:#f59e0b,stroke:#d97706,color:#fff
+    style Analyze fill:#10b981,stroke:#059669,color:#fff
+    style SSE fill:#ef4444,stroke:#dc2626,color:#fff
+    style IFrame fill:#06b6d4,stroke:#0891b2,color:#fff
+    style GenHTML fill:#06b6d4,stroke:#0891b2,color:#fff
+```
 
 ---
 
